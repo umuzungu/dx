@@ -55,8 +55,14 @@ class valuation_class_single(object):
         updates selected valuation parameters
     delta :
         returns the delta of the derivative
+    gamma :
+        returns the gamma of the derivative
     vega :
         returns the vega of the derivative
+    theta :
+        returns the theta of the derivative
+    rho :
+        returns the rho of the derivative
     '''
 
     def __init__(self, name, underlying, mar_env, payoff_func=''):
@@ -84,6 +90,7 @@ class valuation_class_single(object):
 
     def update(self, initial_value=None, volatility=None,
                strike=None, maturity=None):
+        ''' Updates single parameters of the derivative. '''
         if initial_value is not None:
             self.underlying.update(initial_value=initial_value)
         if volatility is not None:
@@ -98,16 +105,17 @@ class valuation_class_single(object):
                 self.underlying.instrument_values = None
 
     def delta(self, interval=None, accuracy=4):
+        ''' Returns the delta for the derivative. '''
         if interval is None:
             interval = self.underlying.initial_value / 50.
         # forward-difference approximation
         # calculate left value for numerical delta
-        value_left = self.present_value(fixed_seed=True)
+        value_left = self.present_value(fixed_seed=True, accuracy=10)
         # numerical underlying value for right value
         initial_del = self.underlying.initial_value + interval
         self.underlying.update(initial_value=initial_del)
         # calculate right value for numerical delta
-        value_right = self.present_value(fixed_seed=True)
+        value_right = self.present_value(fixed_seed=True, accuracy=10)
         # reset the initial_value of the simulation object
         self.underlying.update(initial_value=initial_del - interval)
         delta = (value_right - value_left) / interval
@@ -119,22 +127,90 @@ class valuation_class_single(object):
         else:
             return round(delta, accuracy)
 
+    def gamma(self, interval=None, accuracy=4):
+        ''' Returns the gamma for the derivative. '''
+        if interval is None:
+            interval = self.underlying.initial_value / 50.
+        # forward-difference approximation
+        # calculate left value for numerical gamma
+        value_left = self.delta()
+        # numerical underlying value for right value
+        initial_del = self.underlying.initial_value + interval
+        self.underlying.update(initial_value=initial_del)
+        # calculate right value for numerical delta
+        value_right = self.delta()
+        # reset the initial_value of the simulation object
+        self.underlying.update(initial_value=initial_del - interval)
+        gamma = (value_right - value_left) / interval
+        return round(gamma, accuracy)
+
     def vega(self, interval=0.01, accuracy=4):
+        ''' Returns the vega for the derivative. '''
         if interval < self.underlying.volatility / 50.:
             interval = self.underlying.volatility / 50.
         # forward-difference approximation
         # calculate the left value for numerical vega
-        value_left = self.present_value(fixed_seed=True)
+        value_left = self.present_value(fixed_seed=True, accuracy=10)
         # numerical volatility value for right value
         vola_del = self.underlying.volatility + interval
         # update the simulation object
         self.underlying.update(volatility=vola_del)
         # calculate the right value of numerical vega
-        value_right = self.present_value(fixed_seed=True)
+        value_right = self.present_value(fixed_seed=True, accuracy=10)
         # reset volatility value of simulation object
         self.underlying.update(volatility=vola_del - interval)
         vega = (value_right - value_left) / interval
         return round(vega, accuracy)
+
+    def theta(self, interval=10, accuracy=4):
+        ''' Returns the theta for the derivative. '''
+        # calculate the left value for numerical theta
+        value_left = self.present_value(fixed_seed=True, accuracy=10)
+        # determine new pricing date
+        orig_date = self.pricing_date
+        new_date = orig_date + dt.timedelta(interval)
+        # update the simulation object
+        self.underlying.update(pricing_date=new_date)
+        # calculate the right value of numerical theta
+        self.pricing_date = new_date
+        value_right = self.present_value(fixed_seed=True, accuracy=10)
+        # reset pricing dates of sim & val objects
+        self.underlying.update(pricing_date=orig_date)
+        self.pricing_date = orig_date
+        # calculating the negative value by convention
+        # (i.e. a decrease in time-to-maturity)
+        theta = (value_right - value_left) / (interval / 365.)
+        return round(theta, accuracy)
+
+    def rho(self, interval=0.005, accuracy=4):
+        ''' Returns the rho for the derivative. '''
+        # calculate the left value for numerical rho
+        value_left = self.present_value(fixed_seed=True, accuracy=12)
+        if type(self.discount_curve) == constant_short_rate:
+            # adjust constant short rate factor
+            self.discount_curve.short_rate += interval
+            # delete instrument values (since drift changes)
+            if self.underlying.instrument_values is not None:
+                iv = True
+                store_underlying_values = self.underlying.instrument_values
+            self.underlying.instrument_values = None
+            # calculate the  right value for numerical rho
+            value_right = self.present_value(fixed_seed=True, accuracy=12)
+            # reset constant short rate factor
+            self.discount_curve.short_rate -= interval
+            if iv is True:
+                self.underlying.instrument_values = store_underlying_values
+            rho = (value_right - value_left) / interval
+            return round(rho, accuracy)
+        else:
+            raise NotImplementedError(
+                    'Not yet implemented for this short rate model.')
+
+    def dollar_gamma(self, key, interval=None, accuracy=4):
+        ''' Returns the dollar gamma for the derivative. '''
+        dollar_gamma = (0.5 * self.gamma(key, interval=interval)
+                    * self.underlying_objects[key].initial_value ** 2)
+        return round(dollar_gamma, accuracy)
 
 
 class valuation_mcs_european_single(valuation_class_single):
@@ -220,13 +296,13 @@ class valuation_mcs_american_single(valuation_class_single):
         Attributes
         ==========
         fixed_seed :
-            used same/fixed seed for valuation
+            use same/fixed seed for valuation
         '''
         try:
             strike = self.strike
         except:
             pass
-        paths = self.underlying.get_instrument_values(fixed_seed=fixed_seed) 
+        paths = self.underlying.get_instrument_values(fixed_seed=fixed_seed)
         time_grid = self.underlying.time_grid
         try:
             time_index_start = int(np.where(time_grid == self.pricing_date)[0])
@@ -296,7 +372,7 @@ class valuation_class_multi(object):
         correlations between underlyings
     payoff_func : string
         derivatives payoff in Python syntax
-        Example: 'np.maximum(maturity_value[key] - 100, 0)' 
+        Example: 'np.maximum(maturity_value[key] - 100, 0)'
         where maturity_value[key] is the NumPy vector with
         respective values of the underlying 'key' from the
         risk_factors dictionary
@@ -346,42 +422,28 @@ class valuation_class_multi(object):
 
         # Generating general time grid
         if self.time_grid is None:
-            start = self.val_env.get_constant('starting_date')
-            end = self.val_env.get_constant('final_date')
-            maturity = self.maturity
-            time_grid = pd.date_range(start=start, end=end,
-                                freq=self.val_env.get_constant('frequency')
-                                      ).to_pydatetime()
-            if start in time_grid and end in time_grid and \
-                    maturity in time_grid:
-                self.time_grid = time_grid
-            else:
-                time_grid = list(time_grid)
-                if maturity not in time_grid:
-                    time_grid.insert(0, maturity)
-                if start not in time_grid:
-                    time_grid.insert(0, start)
-                if end not in time_grid:
-                    time_grid.append(end)
-                time_grid.sort()
-                self.time_grid = np.array(time_grid)
-            self.val_env.add_curve('time_grid', self.time_grid)
+            self.generate_time_grid()
 
         if portfolio is False:
-            if correlations is not None:
+            if self.correlations is not None:
                 ul_list = sorted(self.risk_factors)
-                correlation_matrix = np.zeros((len(ul_list), len(ul_list)))
-                np.fill_diagonal(correlation_matrix, 1.0)
-                correlation_matrix = pd.DataFrame(correlation_matrix,
-                                     index=ul_list, columns=ul_list)
-                for corr in correlations:
-                    if corr[2] >= 1.0:
-                        corr[2] = 0.999999999999
-                    correlation_matrix[corr[0]].ix[corr[1]] = corr[2]
-                    correlation_matrix[corr[1]].ix[corr[0]] = corr[2]
-                self.correlation_matrix = correlation_matrix
-                cholesky_matrix = np.linalg.cholesky(
-                    np.array(correlation_matrix))
+                if isinstance(self.correlations, list):
+                    correlation_matrix = np.zeros((len(ul_list), len(ul_list)))
+                    np.fill_diagonal(correlation_matrix, 1.0)
+                    correlation_matrix = pd.DataFrame(correlation_matrix,
+                                         index=ul_list, columns=ul_list)
+                    for corr in correlations:
+                        if corr[2] >= 1.0:
+                            corr[2] = 0.999999999999
+                        correlation_matrix[corr[0]].ix[corr[1]] = corr[2]
+                        correlation_matrix[corr[1]].ix[corr[0]] = corr[2]
+                    self.correlation_matrix = correlation_matrix
+                    cholesky_matrix = np.linalg.cholesky(
+                        np.array(correlation_matrix))
+                else:
+                    # if correlation matrix was already given as pd.DataFrame
+                    cholesky_matrix = np.linalg.cholesky(np.array(
+                                                    self.correlations))
 
                 # dictionary with index positions
                 rn_set = {}
@@ -394,34 +456,71 @@ class valuation_class_multi(object):
                                           self.val_env.constants['paths']),
                                           fixed_seed=self.fixed_seed)
 
-                # adding all to valuation environment   
+                # adding all to valuation environment
                 self.val_env.add_list('cholesky_matrix', cholesky_matrix)
                 self.val_env.add_list('rn_set', rn_set)
                 self.val_env.add_list('random_numbers', random_numbers)
-            for asset in self.risk_factors:
-                mar_env = self.risk_factors[asset]
-                mar_env.add_environment(val_env)
-                model = models[mar_env.constants['model']]
-                if correlations is not None:
-                    self.underlying_objects[asset] = model(asset,
-                                                           mar_env, True)
-                else:
-                    self.underlying_objects[asset] = model(asset,
-                                                           mar_env, False)
+            self.generate_underlying_objects()
+
+
+    def generate_time_grid(self):
+        ''' Generats time grid for all relevant objects. '''
+        start = self.val_env.get_constant('starting_date')
+        end = self.val_env.get_constant('final_date')
+        maturity = self.maturity
+        time_grid = pd.date_range(start=start, end=end,
+                            freq=self.val_env.get_constant('frequency')
+                                  ).to_pydatetime()
+        if start in time_grid and end in time_grid and \
+                maturity in time_grid:
+            self.time_grid = time_grid
+        else:
+            time_grid = list(time_grid)
+            if maturity not in time_grid:
+                time_grid.insert(0, maturity)
+            if start not in time_grid:
+                time_grid.insert(0, start)
+            if end not in time_grid:
+                time_grid.append(end)
+            time_grid.sort()
+            self.time_grid = np.array(time_grid)
+        self.val_env.add_curve('time_grid', self.time_grid)
+
+    def generate_underlying_objects(self):
+        for asset in self.risk_factors:
+            mar_env = self.risk_factors[asset]
+            mar_env.add_environment(self.val_env)
+            model = models[mar_env.constants['model']]
+            if self.correlations is not None:
+                self.underlying_objects[asset] = model(asset,
+                                                       mar_env, True)
+            else:
+                self.underlying_objects[asset] = model(asset,
+                                                       mar_env, False)
 
     def get_instrument_values(self, fixed_seed=True):
         for obj in self.underlying_objects.values():
             if obj.instrument_values is None:
                 obj.generate_paths(fixed_seed=fixed_seed)
 
-    def update(self, key=None, initial_value=None, volatility=None,
-               strike=None, maturity=None):
+    def update(self, key=None, pricing_date=None, initial_value=None,
+                volatility=None, short_rate=None, strike=None, maturity=None):
+        ''' Updates parameters of the derivative. '''
         if key is not None:
             underlying = self.underlying_objects[key]
+        if pricing_date is not None:
+            self.pricing_date=pricing_date
+            self.val_env.add_constant('starting_date', pricing_date)
+            self.generate_time_grid()
+            self.generate_underlying_objects()
         if initial_value is not None:
             underlying.update(initial_value=initial_value)
         if volatility is not None:
             underlying.update(volatility=volatility)
+        if short_rate is not None:
+            self.val_env.curves['discount_curve'].short_rate = short_rate
+            self.discount_curve.short_rate = short_rate
+            self.generate_underlying_objects()
         if strike is not None:
             self.strike = strike
         if maturity is not None:
@@ -430,19 +529,20 @@ class valuation_class_multi(object):
                 underlying.update(final_date=self.maturity)
         self.get_instrument_values()
 
-    def delta(self, key, interval=None):
+    def delta(self, key, interval=None, accuracy=4):
+        ''' Returns the delta for the specified risk factor for the derivative. '''
         if len(self.instrument_values) == 0:
             self.get_instrument_values()
         asset = self.underlying_objects[key]
         if interval is None:
             interval = asset.initial_value / 50.
-        value_left = self.present_value()
+        value_left = self.present_value(fixed_seed=True, accuracy=10)
         start_value = asset.initial_value
         initial_del = start_value + interval
         asset.update(initial_value=initial_del)
         self.get_instrument_values()
-        value_right = self.present_value()
-        asset.update(start_value)
+        value_right = self.present_value(fixed_seed=True, accuracy=10)
+        asset.update(initial_value=start_value)
         self.instrument_values = {}
         delta = (value_right - value_left) / interval
         if delta < -1.0:
@@ -450,23 +550,94 @@ class valuation_class_multi(object):
         elif delta > 1.0:
             return 1.0
         else:
-            return delta
+            return round(delta, accuracy)
 
-    def vega(self, key, interval=0.01):
+    def gamma(self, key, interval=None, accuracy=4):
+        ''' Returns the gamma for the specified risk factor for the derivative. '''
+        if len(self.instrument_values) == 0:
+            self.get_instrument_values()
+        asset = self.underlying_objects[key]
+        if interval is None:
+            interval = asset.initial_value / 50.
+        # forward-difference approximation
+        # calculate left value for numerical gamma
+        value_left = self.delta(key=key)
+        # numerical underlying value for right value
+        initial_del = asset.initial_value + interval
+        asset.update(initial_value=initial_del)
+        # calculate right value for numerical delta
+        value_right = self.delta(key=key)
+        # reset the initial_value of the simulation object
+        asset.update(initial_value=initial_del - interval)
+        gamma = (value_right - value_left) / interval
+        return round(gamma, accuracy)
+
+    def vega(self, key, interval=0.01, accuracy=4):
+        ''' Returns the vega for the specified risk factor. '''
         if len(self.instrument_values) == 0:
             self.get_instrument_values()
         asset = self.underlying_objects[key]
         if interval < asset.volatility / 50.:
             interval = asset.volatility / 50.
-        value_left = self.present_value()
+        value_left = self.present_value(fixed_seed=True, accuracy=10)
         start_vola = asset.volatility
         vola_del = start_vola + interval
         asset.update(volatility=vola_del)
         self.get_instrument_values()
-        value_right = self.present_value()
+        value_right = self.present_value(fixed_seed=True, accuracy=10)
         asset.update(volatility=start_vola)
         self.instrument_values = {}
-        return (value_right - value_left) / interval
+        vega = (value_right - value_left) / interval
+        return round(vega, accuracy)
+
+    def theta(self, interval=10, accuracy=4):
+        ''' Returns the theta for the derivative. '''
+        if len(self.instrument_values) == 0:
+            self.get_instrument_values()
+        # calculate the left value for numerical theta
+        value_left = self.present_value(fixed_seed=True, accuracy=10)
+        # determine new pricing date
+        orig_date = self.pricing_date
+        new_date = orig_date + dt.timedelta(interval)
+        # calculate the right value of numerical theta
+        self.update(pricing_date=new_date)
+        value_right = self.present_value(fixed_seed=True, accuracy=10)
+        # reset pricing dates of valuation & underlying objects
+        self.update(pricing_date=orig_date)
+            # calculating the negative value by convention
+        # (i.e. a decrease in time-to-maturity)
+        theta = (value_right - value_left) / (interval / 365.)
+        return round(theta, accuracy)
+
+    def rho(self, interval=0.005, accuracy=4):
+        ''' Returns the rho for the derivative. '''
+        # calculate the left value for numerical rho
+        value_left = self.present_value(fixed_seed=True, accuracy=12)
+        if type(self.discount_curve) == constant_short_rate:
+            # adjust constant short rate factor
+            orig_short_rate = self.discount_curve.short_rate
+            new_short_rate = orig_short_rate + interval
+            self.update(short_rate=new_short_rate)
+            # self.discount_curve.short_rate += interval
+            # delete instrument values (since drift changes)
+            # for asset in self.underlying_objects.values():
+            #    asset.instrument_values = None
+            # calculate the  right value for numerical rho
+            value_right = self.present_value(fixed_seed=True, accuracy=12)
+            # reset constant short rate factor
+            self.update(short_rate=orig_short_rate)
+            # self.discount_curve.short_rate -= interval
+            rho = (value_right - value_left) / interval
+            return round(rho, accuracy)
+        else:
+            raise NotImplementedError(
+                    'Not yet implemented for this short rate model.')
+
+    def dollar_gamma(self, key, interval=None, accuracy=4):
+        ''' Returns the dollar gamma for the specified risk factor. '''
+        dollar_gamma = (0.5 * self.gamma(key, interval=interval)
+                    * self.underlying_objects[key].initial_value ** 2)
+        return round(dollar_gamma, accuracy)
 
 
 class valuation_mcs_european_multi(valuation_class_multi):
@@ -507,7 +678,7 @@ class valuation_mcs_european_multi(valuation_class_multi):
 
     def present_value(self, accuracy=3, fixed_seed=True, full=False):
         cash_flow = self.generate_payoff(fixed_seed)
-        
+
         discount_factor = self.discount_curve.get_discount_factors(
                           self.time_grid, self.paths)[1][0]
 
@@ -529,7 +700,7 @@ class valuation_mcs_american_multi(valuation_class_multi):
     present_value :
         returns present value (Monte Carlo estimator)
     '''
-    def generate_payoff(self, fixed_seed=True): 
+    def generate_payoff(self, fixed_seed=True):
         self.get_instrument_values(fixed_seed=True)
         self.instrument_values = {key: name.instrument_values for key, name
                        in self.underlying_objects.items()}
@@ -537,11 +708,12 @@ class valuation_mcs_american_multi(valuation_class_multi):
             time_index_start = int(np.where(self.time_grid == self.pricing_date)[0])
             time_index_end = int(np.where(self.time_grid == self.maturity)[0])
         except:
-            print "Maturity date not in time grid of underlying."
+            print "Pricing date or maturity date not in time grid of underlying."
         instrument_values = {}
         for key, obj in self.instrument_values.items():
             instrument_values[key] = \
-                self.instrument_values[key][time_index_start:time_index_end + 1]
+                self.instrument_values[key][time_index_start:time_index_end
+                                            + 1]
         try:
             payoff = eval(self.payoff_func)
             return instrument_values, payoff, time_index_start, time_index_end
@@ -635,7 +807,9 @@ models = {'gbm' : geometric_brownian_motion,
           'jd' : jump_diffusion,
           'sv' : stochastic_volatility,
           'svjd' : stoch_vol_jump_diffusion,
+          'sabr' : sabr_stochastic_volatility,
           'srd' : square_root_diffusion,
+          'mrd' : mean_reverting_diffusion,
           'srjd' : square_root_jump_diffusion,
           'srjd+' : square_root_jump_diffusion_plus}
 
@@ -673,7 +847,7 @@ class derivatives_portfolio(object):
         returns the full distribution of the simulated portfolio values
     get_statistics :
         returns a pandas DataFrame object with portfolio statistics
-    get_port_risk : 
+    get_port_risk :
         estimates sensitivities for point-wise parameter shocks
     '''
 
@@ -727,7 +901,7 @@ class derivatives_portfolio(object):
         # delete duplicate entries
         # & sort dates in time_grid
         time_grid = sorted(set(time_grid))
-        
+
         self.time_grid = np.array(time_grid)
         self.val_env.add_list('time_grid', self.time_grid)
 
@@ -868,7 +1042,8 @@ class derivatives_portfolio(object):
         if self.parallel is True:
             self.underlying_objects = \
                 simulate_parallel(self.underlying_objects.values())
-            results = present_values_parallel(self.valuation_objects.values())
+            results = value_parallel(self.valuation_objects.values(),
+                                     full=True)
             for pos in self.valuation_objects:
                 present_values += results[self.valuation_objects[pos].name] \
                                     * self.positions[pos].quantity
@@ -880,13 +1055,16 @@ class derivatives_portfolio(object):
         return present_values
 
 
-    def get_statistics(self, fixed_seed=False):
+    def get_statistics(self, fixed_seed=None):
         ''' Providing position statistics. '''
         res_list = []
+        if fixed_seed is None:
+            fixed_seed = self.fixed_seed
         if self.parallel is True:
             self.underlying_objects = \
                 simulate_parallel(self.underlying_objects.values())
-            results = value_parallel(self.valuation_objects.values())
+            results = value_parallel(self.valuation_objects.values(),
+                                    fixed_seed=fixed_seed)
             delta_list = greeks_parallel(self.valuation_objects.values(),
                                         Greek='Delta')
             vega_list = greeks_parallel(self.valuation_objects.values(),
@@ -898,7 +1076,7 @@ class derivatives_portfolio(object):
                 present_value = results[self.valuation_objects[pos].name]
             else:
                 present_value = self.valuation_objects[pos].present_value(
-                                fixed_seed = fixed_seed, accuracy=3)
+                                fixed_seed=fixed_seed, accuracy=3)
             pos_list.append(pos)
             pos_list.append(self.positions[pos].name)
             pos_list.append(self.positions[pos].quantity)
@@ -922,80 +1100,141 @@ class derivatives_portfolio(object):
                 pos_list.append(str(delta_dict))
                 pos_list.append(str(vega_dict))
             else:
-                # delta per position
-                pos_list.append(self.valuation_objects[pos].delta()
-                                * self.positions[pos].quantity)
-                # vega per position
-                pos_list.append(self.valuation_objects[pos].vega()
-                                * self.positions[pos].quantity)
+                if self.parallel is True:
+                    # delta from parallel calculation
+                    pos_list.append(delta_list[pos]
+                                   * self.positions[pos].quantity)
+                    # vega from parallel calculation
+                    pos_list.append(vega_list[pos]
+                                   * self.positions[pos].quantity)
+                else:
+                    # delta per position
+                    pos_list.append(self.valuation_objects[pos].delta()
+                                    * self.positions[pos].quantity)
+                    # vega per position
+                    pos_list.append(self.valuation_objects[pos].vega()
+                                    * self.positions[pos].quantity)
             res_list.append(pos_list)
-        res_df = pd.DataFrame(res_list, columns=['position', 'name', 'quantity',
-                                                 'otype', 'risk_facts', 'value',
+        res_df = pd.DataFrame(res_list, columns=['position', 'name',
+                                                 'quantity', 'otype',
+                                                 'risk_facts', 'value',
                                                  'currency', 'pos_value',
                                                  'pos_delta', 'pos_vega'])
         print 'Totals\n', res_df[['pos_value', 'pos_delta', 'pos_vega']].sum()
         return res_df
 
     def get_port_risk(self, Greek='Delta', low=0.8, high=1.2, step=0.1,
-                      fixed_seed=False, risk_factors=None):
+                      fixed_seed=None, risk_factors=None):
         ''' Calculating portfolio risk statistics. '''
         if risk_factors is None:
             risk_factors = self.underlying_objects.keys()
+        if fixed_seed is None:
+            fixed_seed = self.fixed_seed
         sensitivities = {}
         levels = np.arange(low, high + 0.01, step)
+        if self.parallel is True:
+            values = value_parallel(self.valuation_objects.values(),
+                                    fixed_seed=fixed_seed)
+            for key in self.valuation_objects:
+                values[key] *= self.positions[key].quantity
+        else:
+            values = {}
+            for key, obj in self.valuation_objects.items():
+                values[key] = obj.present_value() \
+                            * self.positions[key].quantity
+        import copy
         for rf in risk_factors:
-            underlying = self.underlying_objects[rf]
-            in_val = underlying.initial_value
-            in_vol = underlying.volatility
+            print '\n' + rf
+            in_val = self.underlying_objects[rf].initial_value
+            in_vol = self.underlying_objects[rf].volatility
             results = []
             for level in levels:
-                if Greek == 'Delta':
-                    underlying.update(initial_value=level * in_val)
-                elif Greek == 'Vega':
-                    underlying.update(volatility=level * in_vol)
+                values_sens = copy.deepcopy(values)
+                print level,
+                if level == 1.0:
+                    pass
                 else:
-                    raise NotImplementedError('Spelling error or not implemented.')
-                pos_list = []
-                if self.parallel is True:
-                    respara = value_parallel(self.valuation_objects.values())
-                    pos_list = [respara[self.valuation_objects[pos].name]
-                              * self.positions[pos].quantity
-                                for pos in self.valuation_objects]
-                else:
-                    for pos in self.valuation_objects:
-                        value = self.valuation_objects[pos].present_value(
-                                                    fixed_seed=fixed_seed)
-                        pos_list.append(value * self.positions[pos].quantity)
+                    for key, obj in self.valuation_objects.items():
+                        if rf in self.positions[key].underlyings:
+
+                            if self.positions[key].otype[-5:] == 'multi':
+                                if Greek == 'Delta':
+                                    obj.underlying_objects[rf].update(
+                                            initial_value=level * in_val)
+                                if Greek == 'Vega':
+                                    obj.underlying_objects[rf].update(
+                                            volatility=level * in_vol)
+
+                            else:
+                                if Greek == 'Delta':
+                                    obj.underlying.update(
+                                        initial_value=level * in_val)
+                                elif Greek == 'Vega':
+                                    obj.underlying.update(
+                                        volatility=level * in_vol)
+
+                            values_sens[key] = obj.present_value(
+                                            fixed_seed=fixed_seed) \
+                                             * self.positions[key].quantity
+
+                            if self.positions[key].otype[-5:] == 'multi':
+                                obj.underlying_objects[rf].update(
+                                        initial_value=in_val)
+                                obj.underlying_objects[rf].update(
+                                        volatility=in_vol)
+
+                            else:
+                                obj.underlying.update(initial_value=in_val)
+                                obj.underlying.update(volatility=in_vol)
+
                 if Greek == 'Delta':
-                    results.append((round(level * in_val, 2), 
-                                    sum(pos_list)))
+                    results.append((round(level * in_val, 2),
+                                    sum(values_sens.values())))
                 if Greek == 'Vega':
-                    results.append((round(level * in_vol, 2), 
-                                    sum(pos_list)))
+                    results.append((round(level * in_vol, 2),
+                                    sum(values_sens.values())))
+
             sensitivities[rf + '_' + Greek] = pd.DataFrame(np.array(results),
                                             index=levels,
                                             columns=['factor', 'value'])
-            underlying.update(initial_value=in_val)
-            underlying.update(volatility=in_vol)
-        return pd.Panel(sensitivities)
+        print 2 * '\n'
+        return pd.Panel(sensitivities), sum(values.values())
 
-def risk_report(sensitivities, digits=2):
-    for key in sensitivities:
-        print '\n' + key
-        print np.round(sensitivities[key].transpose(), digits)
+    def get_deltas(self, net=True, low=0.9, high=1.1, step=0.05):
+        ''' Returns the deltas of the portfolio. Convenience function.'''
+        deltas, benchvalue = self.dx_port.get_port_risk(Greek='Delta',
+                                                low=low, high=high, step=step)
+        if net is True:
+            deltas.loc[:, :, 'value'] -= benchvalue
+        return deltas, benchvalue
+
+    def get_vegas(self, net=True, low=0.9, high=1.1, step=0.05):
+        ''' Returns the vegas of the portfolio. Convenience function.'''
+        vegas, benchvalue = self.dx_port.get_port_risk(Greek='Vega',
+                                                low=low, high=high, step=step)
+        if net is True:
+            vegas.loc[:, :, 'value'] -= benchvalue
+        return vegas, benchvalue
+
+def risk_report(sensitivities, digits=2, gross=True):
+    if gross is True:
+        for key in sensitivities:
+            print '\n' + key
+            print np.round(sensitivities[key].transpose(), digits)
+    else:
+        print np.round(sensitivities, digits)
 
 
 import multiprocessing as mp
 
 
-def simulate_parallel(objs):
+def simulate_parallel(objs, fixed_seed=True):
     procs = []
     man = mp.Manager()
     output = man.Queue()
 
     def worker(o, output):
-        # print "I am %s" % o
-        o.generate_paths()
+        o.generate_paths(fixed_seed=fixed_seed)
         output.put((o.name, o))
     for o in objs:
         procs.append(mp.Process(target=worker, args=(o, output)))
@@ -1008,34 +1247,19 @@ def simulate_parallel(objs):
     return underlying_objects
 
 
-def value_parallel(objs):
+def value_parallel(objs, fixed_seed=True, full=False):
     procs = []
     man = mp.Manager()
     output = man.Queue()
 
     def worker(o, output):
-        # print "I am %s" % o
-        pv = o.present_value()
-        output.put((o.name, pv))
-    for o in objs:
-        procs.append(mp.Process(target=worker, args=(o, output)))
-    [pr.start() for pr in procs]
-    [pr.join() for pr in procs]
-    res_list = [output.get() for o in objs]
-    results = {}
-    for o in res_list:
-        results[o[0]] = o[1]
-    return results
+        if full is True:
+            pvs = o.present_value(fixed_seed=fixed_seed, full=True)[1]
+            output.put((o.name, pvs))
+        else:
+            pv = o.present_value(fixed_seed=fixed_seed)
+            output.put((o.name, pv))
 
-def present_values_parallel(objs):
-    procs = []
-    man = mp.Manager()
-    output = man.Queue()
-
-    def worker(o, output):
-        # print "I am %s" % o
-        pvs = o.present_value(full=True)[1]
-        output.put((o.name, pvs))
     for o in objs:
         procs.append(mp.Process(target=worker, args=(o, output)))
     [pr.start() for pr in procs]
@@ -1056,9 +1280,7 @@ def greeks_parallel(objs, Greek='Delta'):
             output.put((o.name, o.delta()))
         elif Greek == 'Vega':
             output.put((o.name, o.vega()))
-        else:
-            raise NotImplementedError('Spelling error or not implemented.')
-            
+
     for o in objs:
         procs.append(mp.Process(target=worker, args=(o, output)))
     [pr.start() for pr in procs]
@@ -1104,7 +1326,7 @@ class var_derivatives_portfolio(derivatives_portfolio):
         self.val_env = val_env
         self.var_risk_factors = var_risk_factors
         self.underlyings = set()
-    
+
         self.time_grid = None
         self.underlying_objects = {}
         self.valuation_objects = {}
@@ -1138,7 +1360,7 @@ class var_derivatives_portfolio(derivatives_portfolio):
             time_grid.append(end)
         # delete duplicate entries & sort dates in time_grid
         time_grid = sorted(set(time_grid))
-        
+
         self.time_grid = np.array(time_grid)
         self.val_env.add_list('time_grid', self.time_grid)
 

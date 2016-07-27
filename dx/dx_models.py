@@ -96,8 +96,10 @@ class simulation_class(object):
             time_grid.append(end)
             # insert end date if not in list
         if len(self.special_dates) > 0:
-            # add all special dates
-            time_grid.extend(self.special_dates)
+            # add all special dates later than self.pricing_date
+            add_dates = [d for d in self.special_dates
+                            if d > self.pricing_date]
+            time_grid.extend(add_dates)
             # delete duplicates and sort
             time_grid = sorted(set(time_grid))
         self.time_grid = np.array(time_grid)
@@ -136,7 +138,13 @@ class geometric_brownian_motion(simulation_class):
     def __init__(self, name, mar_env, corr=False):
         super(geometric_brownian_motion, self).__init__(name, mar_env, corr)
 
-    def update(self, initial_value=None, volatility=None, final_date=None):
+    def update(self, pricing_date=None, initial_value=None,
+                     volatility=None, final_date=None):
+        ''' Updates model parameters. '''
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
         if initial_value is not None:
             self.initial_value = initial_value
         if volatility is not None:
@@ -146,6 +154,7 @@ class geometric_brownian_motion(simulation_class):
         self.instrument_values = None
 
     def generate_paths(self, fixed_seed=False, day_count=365.):
+        ''' Generates Monte Carlo paths for the model. '''
         if self.time_grid is None:
             self.generate_time_grid()
             # method from generic model simulation class
@@ -180,7 +189,7 @@ class geometric_brownian_motion(simulation_class):
                 ran = ran[self.rn_set]
             dt = (self.time_grid[t] - self.time_grid[t - 1]).days / day_count
               # difference between two dates as year fraction
-            rt = (forward_rates[t - 1] + forward_rates[t]) / 2 
+            rt = (forward_rates[t - 1] + forward_rates[t]) / 2
             paths[t] = paths[t - 1] * np.exp((rt - 0.5
                                               * self.volatility ** 2) * dt
                                     + self.volatility * np.sqrt(dt) * ran)
@@ -218,8 +227,13 @@ class jump_diffusion(simulation_class):
         except:
             print "Error parsing market environment."
 
-    def update(self, initial_value=None, volatility=None, lamb=None,
-               mu=None, delta=None, final_date=None):
+    def update(self, pricing_date=None, initial_value=None,
+                volatility=None, lamb=None, mu=None, delta=None,
+                final_date=None):
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
         if initial_value is not None:
             self.initial_value = initial_value
         if volatility is not None:
@@ -238,7 +252,7 @@ class jump_diffusion(simulation_class):
         if self.time_grid is None:
             self.generate_time_grid()
             # method from generic model simulation class
-        # number of dates for time grid 
+        # number of dates for time grid
         M = len(self.time_grid)
         # number of paths
         I = self.paths
@@ -281,7 +295,7 @@ class jump_diffusion(simulation_class):
             paths[t] = paths[t - 1] * (np.exp((rt - rj-
                                         0.5 * self.volatility ** 2) * dt
                                     + self.volatility * np.sqrt(dt) * ran)
-                                    + (np.exp(self.mu + self.delt * 
+                                    + (np.exp(self.mu + self.delt *
                                         sn2[t]) - 1) * poi)
         self.instrument_values = paths
 
@@ -304,7 +318,7 @@ class stochastic_volatility(simulation_class):
     update :
         updates parameters
     generate_paths :
-        returns Monte Carlo paths for the market environment
+        returns Monte Carlo paths given the market environment
     get_volatility_values :
         returns array with simulated volatility paths
     '''
@@ -324,9 +338,12 @@ class stochastic_volatility(simulation_class):
         except:
             print "Error parsing market environment."
 
-    def update(self, initial_value=None, volatility=None,
-               vol_vol=None, kappa=None, theta=None,
-               final_date=None):
+    def update(self, pricing_date=None, initial_value=None, volatility=None,
+               vol_vol=None, kappa=None, theta=None, final_date=None):
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
         if initial_value is not None:
             self.initial_value = initial_value
         if volatility is not None:
@@ -441,9 +458,13 @@ class stoch_vol_jump_diffusion(simulation_class):
         except:
             print "Error parsing market environment."
 
-    def update(self, initial_value=None, volatility=None,
-               vol_vol=None, kappa=None, theta=None, lamb=None,
+    def update(self, pricing_date=None, initial_value=None, volatility=None,
+               vol_vol=None, kappa=None, theta=None, rho=None, lamb=None,
                mu=None, delta=None, final_date=None):
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
         if initial_value is not None:
             self.initial_value = initial_value
         if volatility is not None:
@@ -454,6 +475,8 @@ class stoch_vol_jump_diffusion(simulation_class):
             self.kappa = kappa
         if theta is not None:
             self.theta = theta
+        if rho is not None:
+            self.rho = rho
         if lamb is not None:
             self.lamb = lamb
         if mu is not None:
@@ -561,8 +584,11 @@ class square_root_diffusion(simulation_class):
         except:
             print "Error parsing market environment."
 
-    def update(self, initial_value=None, volatility=None, kappa=None,
-               theta=None, final_date=None):
+    def update(self, pricing_date=None, initial_value=None, volatility=None,        kappa=None, theta=None, final_date=None):
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
         if initial_value is not None:
             self.initial_value = initial_value
         if volatility is not None:
@@ -606,16 +632,18 @@ class square_root_diffusion(simulation_class):
             paths[t] = np.maximum(0, paths_[t])
         self.instrument_values = paths
 
+
 class stochastic_short_rate(object):
     ''' Class for discounting based on stochastic short rates
     based on square-root diffusion process.
+
     Attributes
     ==========
     name : string
         name of the object
     mar_env : market_environment object
         containing all relevant parameters
-    
+
     Methods
     =======
     get_forward_rates :
@@ -665,7 +693,7 @@ class stochastic_short_rate(object):
 
 def srd_forwards(initial_value, (kappa, theta, sigma), time_grid):
     ''' Function for forward vols/rates in SRD model.
-    
+
     Parameters
     ==========
     initial_value: float
@@ -692,6 +720,67 @@ def srd_forwards(initial_value, (kappa, theta, sigma), time_grid):
             (2 * g + (kappa + g) * (np.exp(g * t) - 1)) ** 2)
     forwards = sum1 + sum2
     return forwards
+
+
+class mean_reverting_diffusion(square_root_diffusion):
+    ''' Class to generate simulated paths based on the
+    Vasicek (1977) mean-reverting short rate model.
+
+    Attributes
+    ==========
+    name : string
+        name of the object
+    mar_env : instance of market_environment
+        market environment data for simulation
+    corr : boolean
+        True if correlated with other model object
+
+    Methods
+    =======
+    update :
+        updates parameters
+    generate_paths :
+        returns Monte Carlo paths given the market environment
+    '''
+    def __init__(self, name, mar_env, corr=False, truncation=False):
+        super(mean_reverting_diffusion,
+               self).__init__(name, mar_env, corr)
+        self.truncation = truncation
+
+    def generate_paths(self, fixed_seed=True, day_count=365.):
+        if self.time_grid is None:
+            self.generate_time_grid()
+        M = len(self.time_grid)
+        I = self.paths
+        paths = np.zeros((M, I))
+        paths_ = np.zeros_like(paths)
+        paths[0] = self.initial_value
+        paths_[0] = self.initial_value
+        if self.correlated is False:
+            rand = sn_random_numbers((1, M, I),
+                                     fixed_seed=fixed_seed)
+        else:
+            rand = self.random_numbers
+
+        for t in range(1, len(self.time_grid)):
+            dt = (self.time_grid[t] - self.time_grid[t - 1]).days / day_count
+            if self.correlated is False:
+                ran = rand[t]
+            else:
+                ran = np.dot(self.cholesky_matrix, rand[:, t, :])
+                ran = ran[self.rn_set]
+
+            # full truncation Euler discretization
+            if self.truncation is True:
+                paths_[t] = (paths_[t - 1] + self.kappa
+                             * (self.theta - np.maximum(0, paths_[t - 1])) * dt
+                             + self.volatility * np.sqrt(dt) * ran)
+                paths[t] = np.maximum(0, paths_[t])
+            else:
+                paths[t] = (paths[t - 1] + self.kappa
+                             * (self.theta - paths[t - 1]) * dt
+                             + self.volatility * np.sqrt(dt) * ran)
+        self.instrument_values = paths
 
 
 class square_root_jump_diffusion(simulation_class):
@@ -725,8 +814,13 @@ class square_root_jump_diffusion(simulation_class):
         except:
             print "Error parsing market environment."
 
-    def update(self, initial_value=None, volatility=None, kappa=None,
-               theta=None, lamb=None, mu=None, delt=None, final_date=None):
+    def update(self, pricing_date=None, initial_value=None, volatility=None,
+                kappa=None, theta=None, lamb=None, mu=None, delt=None,
+                final_date=None):
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
         if initial_value is not None:
             self.initial_value = initial_value
         if volatility is not None:
@@ -782,6 +876,7 @@ class square_root_jump_diffusion(simulation_class):
             paths[t, :] = np.maximum(0, paths_[t, :])
         self.instrument_values = paths
 
+
 class square_root_jump_diffusion_plus(square_root_jump_diffusion):
     ''' Class to generate simulated paths based on
     the square-root jump diffusion model with term structure.
@@ -799,7 +894,7 @@ class square_root_jump_diffusion_plus(square_root_jump_diffusion):
     =======
     srd_forward_error :
         error function for forward rate/vols calibration
-    generate_shift_base : 
+    generate_shift_base :
         generates a shift base to take term structure into account
     update :
         updates parameters
@@ -829,7 +924,7 @@ class square_root_jump_diffusion_plus(square_root_jump_diffusion):
         f_model = srd_forwards(self.initial_value, p0,
                                self.term_structure[:, 0])
 
-        MSE = np.sum((self.term_structure[:, 1] 
+        MSE = np.sum((self.term_structure[:, 1]
                       - f_model) ** 2) / len(f_model)
         return MSE
 
@@ -904,6 +999,195 @@ class square_root_jump_diffusion_plus(square_root_jump_diffusion):
             (2 * g + (self.kappa + g) * (np.exp(g * t) - 1)) ** 2)
         self.forward_rates = np.array(zip(time_grid, sum1 + sum2))
 
+
+class sabr_stochastic_volatility(simulation_class):
+    ''' Class to generate simulated paths based on the SABR model.
+
+    Attributes
+    ==========
+    name : string
+        name of the object
+    mar_env : instance of market_environment
+        market environment data for simulation
+    corr : boolean
+        True if correlated with other model object
+
+    Methods
+    =======
+    update :
+        updates parameters
+    generate_paths :
+        returns Monte Carlo paths for the market environment
+    get_volatility_values :
+        returns array with simulated volatility paths
+    get_log_normal_implied_vol(strike, expiry)
+        returns the approximation of the lognormal Black implied volatility given by
+        Hagan et al. (2002)
+    '''
+
+    def __init__(self, name, mar_env, corr=False):
+        super(sabr_stochastic_volatility, self).__init__(name, mar_env, corr)
+        try:
+            self.alpha = mar_env.get_constant('alpha')   # initial variance
+            self.volatility = self.alpha ** 0.5  # initial volatility
+            self.beta = mar_env.get_constant('beta')  # exponent of the FWR
+            self.vol_vol = mar_env.get_constant('vol_vol')  # vol of var
+            self.rho = mar_env.get_constant('rho')  # correlation
+            self.leverage = np.linalg.cholesky(
+                np.array([[1.0, self.rho], [self.rho, 1.0]]))
+            self.volatility_values = None
+        except:
+            print "Error parsing market environment."
+
+    def update(self, pricing_date=None, initial_value=None, volatility=None,
+                alpha=None, beta=None, rho=None, vol_vol=None,
+                final_date=None):
+        ''' Updates the attributes of the object. '''
+        if pricing_date is not None:
+            self.pricing_date = pricing_date
+            self.time_grid = None
+            self.generate_time_grid()
+        if initial_value is not None:
+            self.initial_value = initial_value
+        if volatility is not None:
+            print volatility
+            self.volatility = volatility
+            self.alpha = volatility ** 2
+        if alpha is not None:
+            self.alpha = alpha
+        if beta is not None:
+            self.beta = beta
+        if rho is not None:
+            self.rho = rho
+        if vol_vol is not None:
+            self.vol_vol = vol_vol
+        if final_date is not None:
+            self.final_date = final_date
+            self.time_grid = None
+        self.instrument_values = None
+        self.volatility_values = None
+
+    def get_log_normal_implied_vol(self, strike, expiry):
+        ''' Returns the implied volatility for fixed strike and expiry.
+        '''
+        self.check_parameter_set()
+        one_beta = 1. - self.beta
+        one_beta_square = one_beta ** 2
+        if self.initial_value != strike:
+            fk =  self.initial_value * strike
+            fk_beta = fk ** (one_beta / 2.)
+            log_fk = math.log(self.initial_value / strike)
+            z = self.vol_vol / self.alpha * fk_beta * log_fk
+            x = math.log((math.sqrt(1. - 2 * self.rho *z + z ** 2) + z - self.rho)
+                          / (1 - self.rho) )
+
+            sigma_1 = (self.alpha / fk_beta / (1 +
+                                    (one_beta_square * log_fk ** 2 / 24) +
+                                    (one_beta_square ** 2 *log_fk ** 4 / 1920.))
+                                     * z / x )
+
+            sigma_ex = (one_beta_square / 24. * self.alpha ** 2 / fk_beta ** 2 +
+                                    0.25 * self.rho * self.beta * self.vol_vol *
+                                    self.alpha / fk_beta +
+                                    (2. - 3. * self.rho ** 2) /
+                                    24. * self.vol_vol ** 2)
+
+            sigma = sigma_1 * (1. + sigma_ex * expiry)
+        else:
+            f_beta = self.initial_value ** one_beta
+            f_two_beta = self.initial_value ** (2. -2 * self.beta)
+            sigma = (self.alpha / f_beta) * ( 1 +
+                            expiry * ((one_beta_square / 24. * self.alpha ** 2
+                            / f_two_beta) + (0.25 * self.rho * self.beta *
+                            self.vol_vol * self.alpha / f_beta) +
+                            ((2. - 3 * self.rho ** 2) / 24. * self.vol_vol ** 2)))
+        return sigma
+
+    def calibrate_to_impl_vol(self, implied_vols, maturity, para = list()):
+        ''' Calibrates the parameters alpha, beta, initial_value and vol_vol
+        to a set of given implied volatilities.
+        '''
+        if len(para) != 4:
+            para = (self.alpha, self.beta, self.initial_value, self.vol_vol)
+        def error_function(para):
+            self.alpha, self.beta, self.initial_value, self.vol_vol = para
+            if (self.beta < 0 or self.beta > 1 or self.initial_value <= 0 or
+                 self.vol_vol <= 0):
+                return 10000
+            e = 0
+            for strike in implied_vols.columns:
+                e += (self.get_log_normal_implied_vol(float(strike), maturity)
+                      - float(implied_vols[strike]) / 100.) ** 2
+            return e
+        para = fmin(error_function, para, xtol=0.0000001,
+                   ftol=0.0000001, maxiter=550, maxfun=850)
+        return para
+
+    def check_parameter_set(self):
+        ''' Checks if all needed parameter are set.
+        '''
+        parameter = ["beta", "initial_value", "vol_vol", "alpha", "rho"]
+        for p in parameter:
+            try:
+                val = getattr(self, p)
+            except:
+                val = None
+            if val == None:
+                raise ValueError("Models %s is unset!" %p)
+
+    def generate_paths(self, fixed_seed=True, day_count=365.):
+        ''' Generates Monte Carlo Paths using Euler discretization.
+        '''
+        if self.time_grid is None:
+            self.generate_time_grid()
+        M = len(self.time_grid)
+        I = self.paths
+        paths = np.zeros((M, I))
+        va = np.zeros_like(paths)
+        va_ = np.zeros_like(paths)
+        paths[0] = self.initial_value
+        va[0] = self.alpha
+        va_[0] = self.alpha
+        if self.correlated is False:
+            sn1 = sn_random_numbers((1, M, I),
+                                     fixed_seed=fixed_seed)
+        else:
+            sn1 = self.random_numbers
+
+        # pseudo-random numbers for the stochastic volatility
+        sn2 = sn_random_numbers((1, M, I), fixed_seed=fixed_seed)
+
+        for t in range(1, len(self.time_grid)):
+            dt = (self.time_grid[t] - self.time_grid[t - 1]).days / day_count
+            square_root_dt = np.sqrt(dt)
+            if self.correlated is False:
+                ran = sn1[t]
+            else:
+                ran = np.dot(self.cholesky_matrix, sn1[:, t, :])
+                ran = ran[self.rn_set]
+            rat = np.array([ran, sn2[t]])
+            rat = np.dot(self.leverage, rat)
+
+            va_[t] = va_[t - 1] * (1 + self.vol_vol * square_root_dt * rat[1])
+            va[t] = np.maximum(0, va_[t])
+
+            F_b = np.abs(paths[t - 1]) ** self.beta
+            p = paths[t - 1]  + va_[t] * F_b * square_root_dt * rat[0]
+            if (self.beta > 0 and self.beta < 1):
+                paths[t] = np.maximum(0, p)
+            else:
+                paths[t] = p
+
+        self.instrument_values = paths
+        self.volatility_values = np.sqrt(va)
+
+    def get_volatility_values(self):
+        ''' Returns the volatility values for the model object.
+        '''
+        if self.volatility_values is None:
+            self.generate_paths(self)
+        return self.volatility_values
+
 class general_underlying(object):
     ''' Needed for VAR-based portfolio modeling and valuation. '''
     def __init__(self, name, data, val_env):
@@ -915,6 +1199,6 @@ class general_underlying(object):
         self.special_dates = []
         self.time_grid = val_env.get_list('time_grid')
         self.fit_model = None
-    
+
     def get_instrument_values(self, fixed_seed=False):
         return self.data.values
